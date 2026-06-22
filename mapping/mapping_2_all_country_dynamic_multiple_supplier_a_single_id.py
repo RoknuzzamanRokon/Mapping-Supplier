@@ -13,14 +13,14 @@ load_dotenv()
 PIPELINE_MAPPING = {
     "base_supplier": "agoda",
     # "base_supplier_2": "ean",
-    # "base_supplier_3": "tbo",
+    # "base_supplier_3": "tbohotel",
     "target_supplier": "hotelbeds",
 }
 
 # Set this to a single hotel_id to process only that hotel.
 # Use None to process all pending hotels.
 TARGET_HOTEL_ID = None
-# TARGET_HOTEL_ID = "15454"
+# TARGET_HOTEL_ID = "852355"
 
 
 table_2 = f"s_{PIPELINE_MAPPING['target_supplier']}_master"
@@ -76,7 +76,7 @@ SUPPLIER_NAME = PIPELINE_MAPPING["target_supplier"]
 BASE_SUPPLIERS = get_base_suppliers()
 if not BASE_SUPPLIERS:
     raise ValueError("PIPELINE_MAPPING must define at least one base_supplier key")
-MATCH_RADIUS_KM = 10
+MATCH_RADIUS_KM = 15
 EARTH_KM_PER_LAT_DEGREE = 111.0
 TOP_HOTELS = 9
 

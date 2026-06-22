@@ -13,7 +13,7 @@ load_dotenv()
 SUPPLIER_NAME = "hotelbeds"
 TARGET_COUNTRY = "TH"
 MATCH_RADIUS_KM = 200
-TOP_HOTELS = 6
+TOP_HOTELS = 9
 EARTH_KM_PER_LAT_DEGREE = 111.0
 
 table_1 = "s_agoda_master"
