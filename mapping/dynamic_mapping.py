@@ -968,15 +968,8 @@ def process_one_target_supplier(
     all_base_supplier_mapping_caches,
     cumulative_candidate_scores,
     ittid_generator,
-    write_result=True,
 ):
     if target_row["lat"] is None or target_row["lon"] is None:
-        if not write_result:
-            print(
-                f"    ⊘ SKIP: {SUPPLIER_NAME}#{target_row['hotel_id']} (no lat/lon)"
-            )
-            return False
-
         existing = target_mapping_cache.get(target_row["hotel_id"])
         if existing:
             analysis_payload = build_analysis_payload(
@@ -1037,12 +1030,6 @@ def process_one_target_supplier(
             overall_best_score = candidate
 
     if not best_score:
-        if not write_result:
-            print(
-                f"    ❌ NO MATCH: {SUPPLIER_NAME}#{target_row['hotel_id']} → {base_supplier.upper()}"
-            )
-            return False
-
         existing = target_mapping_cache.get(target_row["hotel_id"])
         if existing:
             ittid = existing["ittid"]
@@ -1090,14 +1077,6 @@ def process_one_target_supplier(
     for candidate in cumulative_candidate_scores:
         if is_better_candidate(candidate, overall_best_score):
             overall_best_score = candidate
-
-    if not write_result:
-        print(
-            f"    🔎 BEST CANDIDATE: {SUPPLIER_NAME}#{target_row['hotel_id']} → {base_supplier.upper()}#{best_score['base_supplier_hotel_id']} | "
-            f"score:{best_score['total_bm']:.1f}/{MAX_TOTAL_SCORE} | "
-            f"dist:{best_score['distance_km']:.2f}km | conf:{best_score['confidence'].upper()}"
-        )
-        return False
 
     if overall_best_score and overall_best_score["total_bm"] >= AUTO_MATCH_THRESHOLD:
         overall_best_supplier = overall_best_score.get("candidate_supplier", base_supplier)
@@ -1282,7 +1261,6 @@ def main():
                     base_supplier_mapping_caches,
                     cumulative_candidate_scores_by_hotel[target_row["hotel_id"]],
                     ittid_generator,
-                    write_result=(base_supplier == BASE_SUPPLIERS[-1]),
                 )
                 if is_matched:
                     if target_row["hotel_id"] not in matched_target_hotel_ids:
