@@ -22,3 +22,5 @@ mapping/mapping_2_all_country_dynamic_multiple_supplier.py
 mapping/mapping_2_single_id.py
 mapping/mapping_2_single_id_dynamic.py
 mapping/mapping_with_dynamic.py
+
+*test.py
