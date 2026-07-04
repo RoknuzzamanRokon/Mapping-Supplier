@@ -12,9 +12,9 @@ load_dotenv()
 
 PIPELINE_MAPPING = {
     "base_supplier": "agoda",
-    # "base_supplier_2": "ean",
+    "base_supplier_2": "hotelbeds",
     # "base_supplier_3": "tbohotel",
-    "target_supplier": "hotelbeds",
+    "target_supplier": "ean",
 }
 
 # Set this to a single hotel_id to process only that hotel.
