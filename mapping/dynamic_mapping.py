@@ -20,7 +20,7 @@ PIPELINE_MAPPING = {
 # Set this to a single hotel_id to process only that hotel.
 # Use None to process all pending hotels.
 TARGET_HOTEL_ID = None
-# TARGET_HOTEL_ID = "852355"
+# TARGET_HOTEL_ID = "128403568"
 
 
 table_2 = f"s_{PIPELINE_MAPPING['target_supplier']}_master"
@@ -76,7 +76,7 @@ SUPPLIER_NAME = PIPELINE_MAPPING["target_supplier"]
 BASE_SUPPLIERS = get_base_suppliers()
 if not BASE_SUPPLIERS:
     raise ValueError("PIPELINE_MAPPING must define at least one base_supplier key")
-MATCH_RADIUS_KM = 15
+MATCH_RADIUS_KM = 25
 EARTH_KM_PER_LAT_DEGREE = 111.0
 TOP_HOTELS = 9
 
@@ -834,6 +834,54 @@ def serialize_hotel_record(row, supplier_name):
     return payload
 
 
+def get_candidate_mapping(candidate, candidate_supplier_name, candidate_mapping_cache):
+    if not candidate_mapping_cache:
+        return None
+
+    if (
+        candidate_supplier_name in candidate_mapping_cache
+        and isinstance(candidate_mapping_cache[candidate_supplier_name], dict)
+    ):
+        supplier_mapping_cache = candidate_mapping_cache[candidate_supplier_name]
+    else:
+        supplier_mapping_cache = candidate_mapping_cache
+
+    return supplier_mapping_cache.get(candidate["candidate_row"]["hotel_id"])
+
+
+def build_candidate_analysis_payload(
+    candidate,
+    fallback_candidate_supplier,
+    candidate_mapping_cache,
+):
+    candidate_supplier_name = candidate.get(
+        "candidate_supplier",
+        fallback_candidate_supplier,
+    )
+    candidate_payload = serialize_hotel_record(
+        candidate["candidate_row"],
+        candidate_supplier_name,
+    )
+    candidate_mapping = get_candidate_mapping(
+        candidate,
+        candidate_supplier_name,
+        candidate_mapping_cache,
+    )
+    candidate_payload["ittid"] = (
+        candidate_mapping["ittid"] if candidate_mapping else None
+    )
+    candidate_payload["distance_km"] = (
+        round(candidate["distance_km"], 4)
+        if candidate["distance_km"] is not None
+        else None
+    )
+    candidate_payload["confidence"] = candidate["confidence"]
+    candidate_payload["similarity_score"] = candidate["total_bm"]
+    # candidate_payload["raw_scores"] = candidate["raw_scores"]
+    # candidate_payload["weighted_scores"] = candidate["weighted_scores"]
+    return candidate_payload
+
+
 def build_analysis_payload(
     source_row,
     source_supplier,
@@ -845,25 +893,13 @@ def build_analysis_payload(
     top_matches = []
 
     for candidate in sorted_candidate_scores(candidate_scores)[:TOP_HOTELS]:
-        candidate_payload = serialize_hotel_record(
-            candidate["candidate_row"], candidate_supplier
+        top_matches.append(
+            build_candidate_analysis_payload(
+                candidate,
+                candidate_supplier,
+                candidate_mapping_cache,
+            )
         )
-        candidate_mapping = candidate_mapping_cache.get(
-            candidate["candidate_row"]["hotel_id"]
-        )
-        candidate_payload["ittid"] = (
-            candidate_mapping["ittid"] if candidate_mapping else None
-        )
-        candidate_payload["distance_km"] = (
-            round(candidate["distance_km"], 4)
-            if candidate["distance_km"] is not None
-            else None
-        )
-        candidate_payload["confidence"] = candidate["confidence"]
-        candidate_payload["similarity_score"] = candidate["total_bm"]
-        # candidate_payload["raw_scores"] = candidate["raw_scores"]
-        # candidate_payload["weighted_scores"] = candidate["weighted_scores"]
-        top_matches.append(candidate_payload)
 
     supplier_payload = serialize_hotel_record(source_row, source_supplier)
     supplier_payload["ittid"] = source_ittid
@@ -889,6 +925,8 @@ def process_one_target_supplier(
     lat_step,
     target_mapping_cache,
     base_supplier_mapping_cache,
+    all_base_supplier_mapping_caches,
+    cumulative_candidate_scores,
     ittid_generator,
 ):
     if target_row["lat"] is None or target_row["lon"] is None:
@@ -900,7 +938,7 @@ def process_one_target_supplier(
                 existing["ittid"],
                 [],
                 base_supplier,
-                base_supplier_mapping_cache,
+                all_base_supplier_mapping_caches,
             )
             update_mapping(
                 existing["Id"],
@@ -919,7 +957,7 @@ def process_one_target_supplier(
                 new_ittid,
                 [],
                 base_supplier,
-                base_supplier_mapping_cache,
+                all_base_supplier_mapping_caches,
             )
             update_mapping(
                 mapping["Id"], new_ittid, get_zero_score_payload(), analysis_payload
@@ -939,10 +977,17 @@ def process_one_target_supplier(
         if scored is None:
             continue
 
+        scored["candidate_supplier"] = base_supplier
         scored_candidates.append(scored)
 
         if is_better_candidate(scored, best_score):
             best_score = scored
+
+    cumulative_candidate_scores.extend(scored_candidates)
+    overall_best_score = None
+    for candidate in cumulative_candidate_scores:
+        if is_better_candidate(candidate, overall_best_score):
+            overall_best_score = candidate
 
     if not best_score:
         existing = target_mapping_cache.get(target_row["hotel_id"])
@@ -958,12 +1003,13 @@ def process_one_target_supplier(
             target_row,
             SUPPLIER_NAME,
             ittid,
-            scored_candidates,
+            cumulative_candidate_scores,
             base_supplier,
-            base_supplier_mapping_cache,
+            all_base_supplier_mapping_caches,
         )
+        score_payload = overall_best_score if overall_best_score else get_zero_score_payload()
         update_mapping(
-            existing["Id"], ittid, get_zero_score_payload(), analysis_payload
+            existing["Id"], ittid, score_payload, analysis_payload
         )
         update_target_supplier_status(target_row["Id"], "new-mapping")
         print(
@@ -987,9 +1033,18 @@ def process_one_target_supplier(
                 ):
                     best_score["confidence"] = "medium"
 
-    if best_score["total_bm"] >= AUTO_MATCH_THRESHOLD:
-        base_supplier_map = base_supplier_mapping_cache.get(
-            best_score["base_supplier_hotel_id"]
+    overall_best_score = None
+    for candidate in cumulative_candidate_scores:
+        if is_better_candidate(candidate, overall_best_score):
+            overall_best_score = candidate
+
+    if overall_best_score and overall_best_score["total_bm"] >= AUTO_MATCH_THRESHOLD:
+        overall_best_supplier = overall_best_score.get("candidate_supplier", base_supplier)
+        overall_supplier_mapping_cache = all_base_supplier_mapping_caches.get(
+            overall_best_supplier, {}
+        )
+        base_supplier_map = overall_supplier_mapping_cache.get(
+            overall_best_score["base_supplier_hotel_id"]
         )
         matched_ittid = (
             base_supplier_map["ittid"]
@@ -1004,21 +1059,21 @@ def process_one_target_supplier(
             target_row,
             SUPPLIER_NAME,
             matched_ittid,
-            scored_candidates,
+            cumulative_candidate_scores,
             base_supplier,
-            base_supplier_mapping_cache,
+            all_base_supplier_mapping_caches,
         )
-        update_mapping(mapping["Id"], matched_ittid, best_score, analysis_payload)
+        update_mapping(mapping["Id"], matched_ittid, overall_best_score, analysis_payload)
         update_target_supplier_status(target_row["Id"], "mapped")
 
         print(
-            f"    ✅ AUTO-MATCH: {SUPPLIER_NAME}#{target_row['hotel_id']} → {base_supplier.upper()}#{best_score['base_supplier_hotel_id']} | "
-            f"ittid:{matched_ittid} | score:{best_score['total_bm']:.1f}/{MAX_TOTAL_SCORE} | "
-            f"dist:{best_score['distance_km']:.2f}km | conf:{best_score['confidence'].upper()}"
+            f"    ✅ AUTO-MATCH: {SUPPLIER_NAME}#{target_row['hotel_id']} → {overall_best_supplier.upper()}#{overall_best_score['base_supplier_hotel_id']} | "
+            f"ittid:{matched_ittid} | score:{overall_best_score['total_bm']:.1f}/{MAX_TOTAL_SCORE} | "
+            f"dist:{overall_best_score['distance_km']:.2f}km | conf:{overall_best_score['confidence'].upper()}"
         )
         return True
 
-    if best_score["total_bm"] >= REVIEW_THRESHOLD:
+    if overall_best_score and overall_best_score["total_bm"] >= REVIEW_THRESHOLD:
         existing = target_mapping_cache.get(target_row["hotel_id"])
         if existing:
             ittid = existing["ittid"]
@@ -1032,17 +1087,18 @@ def process_one_target_supplier(
             target_row,
             SUPPLIER_NAME,
             ittid,
-            scored_candidates,
+            cumulative_candidate_scores,
             base_supplier,
-            base_supplier_mapping_cache,
+            all_base_supplier_mapping_caches,
         )
-        update_mapping(existing["Id"], ittid, best_score, analysis_payload)
+        update_mapping(existing["Id"], ittid, overall_best_score, analysis_payload)
         update_target_supplier_status(target_row["Id"], "review")
 
+        overall_best_supplier = overall_best_score.get("candidate_supplier", base_supplier)
         print(
-            f"    🟡 REVIEW: {SUPPLIER_NAME}#{target_row['hotel_id']} → {base_supplier.upper()}#{best_score['base_supplier_hotel_id']} | "
-            f"ittid:{ittid} | score:{best_score['total_bm']:.1f}/{MAX_TOTAL_SCORE} | "
-            f"dist:{best_score['distance_km']:.2f}km | conf:{best_score['confidence'].upper()}"
+            f"    🟡 REVIEW: {SUPPLIER_NAME}#{target_row['hotel_id']} → {overall_best_supplier.upper()}#{overall_best_score['base_supplier_hotel_id']} | "
+            f"ittid:{ittid} | score:{overall_best_score['total_bm']:.1f}/{MAX_TOTAL_SCORE} | "
+            f"dist:{overall_best_score['distance_km']:.2f}km | conf:{overall_best_score['confidence'].upper()}"
         )
         return False
 
@@ -1059,17 +1115,18 @@ def process_one_target_supplier(
         target_row,
         SUPPLIER_NAME,
         ittid,
-        scored_candidates,
+        cumulative_candidate_scores,
         base_supplier,
-        base_supplier_mapping_cache,
+        all_base_supplier_mapping_caches,
     )
-    update_mapping(existing["Id"], ittid, best_score, analysis_payload)
+    update_mapping(existing["Id"], ittid, overall_best_score, analysis_payload)
     update_target_supplier_status(target_row["Id"], "new-mapping")
 
+    overall_best_supplier = overall_best_score.get("candidate_supplier", base_supplier)
     print(
-        f"    ❌ WEAK MATCH: {SUPPLIER_NAME}#{target_row['hotel_id']} → {base_supplier.upper()}#{best_score['base_supplier_hotel_id']} | "
-        f"ittid:{ittid} | score:{best_score['total_bm']:.1f}/{MAX_TOTAL_SCORE} | "
-        f"dist:{best_score['distance_km']:.2f}km | conf:{best_score['confidence'].upper()}"
+        f"    ❌ WEAK MATCH: {SUPPLIER_NAME}#{target_row['hotel_id']} → {overall_best_supplier.upper()}#{overall_best_score['base_supplier_hotel_id']} | "
+        f"ittid:{ittid} | score:{overall_best_score['total_bm']:.1f}/{MAX_TOTAL_SCORE} | "
+        f"dist:{overall_best_score['distance_km']:.2f}km | conf:{overall_best_score['confidence'].upper()}"
     )
     return False
 
@@ -1103,6 +1160,7 @@ def main():
     }
     ittid_generator = IttidGenerator(fetch_max_ittid_sequence_by_country())
     matched_target_hotel_ids = set()
+    cumulative_candidate_scores_by_hotel = defaultdict(list)
 
     for base_supplier in BASE_SUPPLIERS:
         base_supplier_mapping_cache = base_supplier_mapping_caches[base_supplier]
@@ -1160,6 +1218,8 @@ def main():
                     lat_step,
                     target_mapping_cache,
                     base_supplier_mapping_cache,
+                    base_supplier_mapping_caches,
+                    cumulative_candidate_scores_by_hotel[target_row["hotel_id"]],
                     ittid_generator,
                 )
                 if is_matched:
