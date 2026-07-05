@@ -19,8 +19,8 @@ PIPELINE_MAPPING = {
 
 # Set this to a single hotel_id to process only that hotel.
 # Use None to process all pending hotels.
-# TARGET_HOTEL_ID = None
-TARGET_HOTEL_ID = "123939543"
+TARGET_HOTEL_ID = None
+# TARGET_HOTEL_ID = "123939543"
 
 
 table_2 = f"s_{PIPELINE_MAPPING['target_supplier']}_master"
@@ -1204,6 +1204,194 @@ def process_one_target_supplier(
     return False
 
 
+def best_score_from_candidates(candidate_scores):
+    best_score = None
+    for candidate in candidate_scores:
+        if is_better_candidate(candidate, best_score):
+            best_score = candidate
+    return best_score
+
+
+def score_target_against_base_supplier(
+    target_row,
+    base_supplier,
+    geo_index,
+    lat_step,
+    target_mapping_cache,
+    base_supplier_mapping_cache,
+):
+    best_score = None
+    scored_candidates = []
+
+    for candidate_row in get_candidate_pool(target_row, geo_index, lat_step):
+        scored = score_candidate(target_row, candidate_row)
+        if scored is None:
+            continue
+
+        scored["candidate_supplier"] = base_supplier
+        scored_candidates.append(scored)
+
+        if is_better_candidate(scored, best_score):
+            best_score = scored
+
+    if best_score:
+        hotel_key = normalize_hotel_id(target_row["hotel_id"])
+        base_supplier_existing = base_supplier_mapping_cache.get(
+            normalize_hotel_id(best_score["base_supplier_hotel_id"])
+        )
+        if base_supplier_existing:
+            existing_target = target_mapping_cache.get(
+                normalize_hotel_id(base_supplier_existing["hotel_id"])
+            )
+            if (
+                existing_target
+                and normalize_hotel_id(existing_target["hotel_id"]) != hotel_key
+            ):
+                if best_score["total_bm"] < 920:
+                    best_score["total_bm"] = round(best_score["total_bm"] * 0.95, 2)
+                    if (
+                        best_score["confidence"] == "high"
+                        and best_score["total_bm"] < AUTO_MATCH_THRESHOLD
+                    ):
+                        best_score["confidence"] = "medium"
+
+    return best_score, scored_candidates
+
+
+def save_target_supplier_result(
+    target_row,
+    overall_best_score,
+    cumulative_candidate_scores,
+    target_mapping_cache,
+    base_supplier_mapping_caches,
+    ittid_generator,
+):
+    hotel_key = normalize_hotel_id(target_row["hotel_id"])
+
+    if target_row["lat"] is None or target_row["lon"] is None:
+        existing = target_mapping_cache.get(hotel_key)
+        if existing:
+            ittid = existing["ittid"]
+        else:
+            ittid = ittid_generator.next(target_row["country_code"])
+            existing = ensure_target_supplier_mapping(
+                target_row["hotel_id"], ittid, target_mapping_cache
+            )
+
+        analysis_payload = build_analysis_payload(
+            target_row,
+            SUPPLIER_NAME,
+            ittid,
+            [],
+            BASE_SUPPLIERS[-1],
+            base_supplier_mapping_caches,
+        )
+        update_mapping(existing["Id"], ittid, get_zero_score_payload(), analysis_payload)
+        update_target_supplier_status(target_row["Id"], "new-mapping")
+        print(f"    ⊘ SKIP: {SUPPLIER_NAME}#{target_row['hotel_id']} (no lat/lon)")
+        return False
+
+    if not overall_best_score:
+        existing = target_mapping_cache.get(hotel_key)
+        if existing:
+            ittid = existing["ittid"]
+        else:
+            ittid = ittid_generator.next(target_row["country_code"])
+            existing = ensure_target_supplier_mapping(
+                target_row["hotel_id"], ittid, target_mapping_cache
+            )
+
+        analysis_payload = build_analysis_payload(
+            target_row,
+            SUPPLIER_NAME,
+            ittid,
+            cumulative_candidate_scores,
+            BASE_SUPPLIERS[-1],
+            base_supplier_mapping_caches,
+        )
+        update_mapping(existing["Id"], ittid, get_zero_score_payload(), analysis_payload)
+        update_target_supplier_status(target_row["Id"], "new-mapping")
+        print(
+            f"    ❌ NO MATCH: {SUPPLIER_NAME}#{target_row['hotel_id']} → created ittid:{ittid}"
+        )
+        return False
+
+    overall_best_supplier = overall_best_score.get("candidate_supplier", BASE_SUPPLIERS[-1])
+
+    if overall_best_score["total_bm"] >= AUTO_MATCH_THRESHOLD:
+        overall_supplier_mapping_cache = base_supplier_mapping_caches.get(
+            overall_best_supplier, {}
+        )
+        base_supplier_map = overall_supplier_mapping_cache.get(
+            normalize_hotel_id(overall_best_score["base_supplier_hotel_id"])
+        )
+        existing = target_mapping_cache.get(hotel_key)
+        if base_supplier_map:
+            ittid = base_supplier_map["ittid"]
+        elif existing:
+            ittid = existing["ittid"]
+        else:
+            ittid = ittid_generator.next(target_row["country_code"])
+
+        mapping = ensure_target_supplier_mapping(
+            target_row["hotel_id"], ittid, target_mapping_cache
+        )
+        analysis_payload = build_analysis_payload(
+            target_row,
+            SUPPLIER_NAME,
+            ittid,
+            cumulative_candidate_scores,
+            overall_best_supplier,
+            base_supplier_mapping_caches,
+        )
+        update_mapping(mapping["Id"], ittid, overall_best_score, analysis_payload)
+        update_target_supplier_status(target_row["Id"], "mapped")
+
+        print(
+            f"    ✅ AUTO-MATCH: {SUPPLIER_NAME}#{target_row['hotel_id']} → {overall_best_supplier.upper()}#{overall_best_score['base_supplier_hotel_id']} | "
+            f"ittid:{ittid} | score:{overall_best_score['total_bm']:.1f}/{MAX_TOTAL_SCORE} | "
+            f"dist:{overall_best_score['distance_km']:.2f}km | conf:{overall_best_score['confidence'].upper()}"
+        )
+        return True
+
+    existing = target_mapping_cache.get(hotel_key)
+    if existing:
+        ittid = existing["ittid"]
+    else:
+        ittid = ittid_generator.next(target_row["country_code"])
+        existing = ensure_target_supplier_mapping(
+            target_row["hotel_id"], ittid, target_mapping_cache
+        )
+
+    analysis_payload = build_analysis_payload(
+        target_row,
+        SUPPLIER_NAME,
+        ittid,
+        cumulative_candidate_scores,
+        overall_best_supplier,
+        base_supplier_mapping_caches,
+    )
+
+    if overall_best_score["total_bm"] >= REVIEW_THRESHOLD:
+        update_mapping(existing["Id"], ittid, overall_best_score, analysis_payload)
+        update_target_supplier_status(target_row["Id"], "review")
+        print(
+            f"    🟡 REVIEW: {SUPPLIER_NAME}#{target_row['hotel_id']} → {overall_best_supplier.upper()}#{overall_best_score['base_supplier_hotel_id']} | "
+            f"ittid:{ittid} | score:{overall_best_score['total_bm']:.1f}/{MAX_TOTAL_SCORE} | "
+            f"dist:{overall_best_score['distance_km']:.2f}km | conf:{overall_best_score['confidence'].upper()}"
+        )
+        return False
+
+    update_mapping(existing["Id"], ittid, overall_best_score, analysis_payload)
+    update_target_supplier_status(target_row["Id"], "new-mapping")
+    print(
+        f"    ❌ WEAK MATCH: {SUPPLIER_NAME}#{target_row['hotel_id']} → {overall_best_supplier.upper()}#{overall_best_score['base_supplier_hotel_id']} | "
+        f"ittid:{ittid} | score:{overall_best_score['total_bm']:.1f}/{MAX_TOTAL_SCORE} | "
+        f"dist:{overall_best_score['distance_km']:.2f}km | conf:{overall_best_score['confidence'].upper()}"
+    )
+    return False
+
+
 def main():
     supplier_priority = " > ".join(supplier.upper() for supplier in BASE_SUPPLIERS)
     print(
@@ -1233,29 +1421,23 @@ def main():
     }
     ittid_generator = IttidGenerator(fetch_max_ittid_sequence_by_country())
     matched_target_hotel_ids = set()
-    cumulative_candidate_scores_by_hotel = defaultdict(list)
 
-    for base_supplier in BASE_SUPPLIERS:
-        base_supplier_mapping_cache = base_supplier_mapping_caches[base_supplier]
-        matched_this_supplier = 0
-
+    for idx, country_code in enumerate(target_countries, 1):
         print("=" * 50)
-        print(f"Processing Base Supplier: {base_supplier}")
+        print(f"Processing Country: {country_code.upper()}")
         print("=" * 50)
 
-        for idx, country_code in enumerate(target_countries, 1):
-            target_rows = [
-                row
-                for row in target_rows_by_country[country_code]
-            ]
-            if not target_rows:
-                continue
+        target_rows = target_rows_by_country[country_code]
+        if not target_rows:
+            continue
 
-            print(
-                f"▶️  [{idx:2d}/{len(target_countries)}] Country {country_code.upper()} - "
-                f"{len(target_rows)} remaining {SUPPLIER_NAME.upper()} hotels to match"
-            )
+        print(
+            f"▶️  [{idx:2d}/{len(target_countries)}] Country {country_code.upper()} - "
+            f"{len(target_rows)} {SUPPLIER_NAME.upper()} hotels to match"
+        )
 
+        supplier_contexts = {}
+        for base_supplier in BASE_SUPPLIERS:
             base_supplier_candidates = fetch_base_supplier_candidates(
                 country_code,
                 base_supplier,
@@ -1276,34 +1458,53 @@ def main():
                 f"auto≥{AUTO_MATCH_THRESHOLD}, review≥{REVIEW_THRESHOLD}"
             )
 
-            for i, target_row in enumerate(target_rows, 1):
-                if i % 50 == 0:
-                    percent = int((i / len(target_rows)) * 100)
-                    print(f"  ⏳ Progress: {i:4d}/{len(target_rows)} ({percent:3d}%)")
+            supplier_contexts[base_supplier] = {
+                "geo_index": geo_index,
+                "lat_step": lat_step,
+                "mapping_cache": base_supplier_mapping_caches[base_supplier],
+            }
 
-                hotel_key = normalize_hotel_id(target_row["hotel_id"])
-                is_matched = process_one_target_supplier(
-                    target_row,
-                    base_supplier,
-                    geo_index,
-                    lat_step,
-                    target_mapping_cache,
-                    base_supplier_mapping_cache,
-                    base_supplier_mapping_caches,
-                    cumulative_candidate_scores_by_hotel[hotel_key],
-                    ittid_generator,
-                )
-                if is_matched:
-                    if hotel_key not in matched_target_hotel_ids:
-                        matched_this_supplier += 1
-                    matched_target_hotel_ids.add(hotel_key)
+        matched_this_country = 0
+        for i, target_row in enumerate(target_rows, 1):
+            if i % 50 == 0:
+                percent = int((i / len(target_rows)) * 100)
+                print(f"  ⏳ Progress: {i:4d}/{len(target_rows)} ({percent:3d}%)")
 
-            print(f"  ✅ {country_code} complete for {base_supplier.upper()}\n")
+            cumulative_candidate_scores = []
+            if target_row["lat"] is not None and target_row["lon"] is not None:
+                for base_supplier in BASE_SUPPLIERS:
+                    supplier_context = supplier_contexts[base_supplier]
+                    _, scored_candidates = score_target_against_base_supplier(
+                        target_row,
+                        base_supplier,
+                        supplier_context["geo_index"],
+                        supplier_context["lat_step"],
+                        target_mapping_cache,
+                        supplier_context["mapping_cache"],
+                    )
+                    cumulative_candidate_scores.extend(scored_candidates)
+
+            overall_best_score = best_score_from_candidates(cumulative_candidate_scores)
+            hotel_key = normalize_hotel_id(target_row["hotel_id"])
+            is_matched = save_target_supplier_result(
+                target_row,
+                overall_best_score,
+                cumulative_candidate_scores,
+                target_mapping_cache,
+                base_supplier_mapping_caches,
+                ittid_generator,
+            )
+            if is_matched:
+                if hotel_key not in matched_target_hotel_ids:
+                    matched_this_country += 1
+                matched_target_hotel_ids.add(hotel_key)
+
+        print(f"  ✅ {country_code} complete\n")
 
         remaining_target_hotels = total_rows - len(matched_target_hotel_ids)
         print("=" * 50)
-        print(f"Processing Base Supplier: {base_supplier}")
-        print(f"Matched: {matched_this_supplier}")
+        print(f"Processing Country: {country_code.upper()}")
+        print(f"Matched: {matched_this_country}")
         print(f"Remaining Target Hotels: {remaining_target_hotels}")
         print("=" * 50)
         print()
