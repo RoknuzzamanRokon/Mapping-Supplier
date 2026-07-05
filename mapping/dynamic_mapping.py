@@ -19,13 +19,8 @@ PIPELINE_MAPPING = {
 
 # Set this to a single hotel_id to process only that hotel.
 # Use None to process all pending hotels.
-<<<<<<< HEAD
 TARGET_HOTEL_ID = None
 # TARGET_HOTEL_ID = "128407045"
-=======
-# TARGET_HOTEL_ID = None
-TARGET_HOTEL_ID = "126942554"
->>>>>>> 53710e973274ac082d764a72b367525ba53a7277
 
 
 table_2 = f"s_{PIPELINE_MAPPING['target_supplier']}_master"
