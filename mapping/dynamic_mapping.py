@@ -890,6 +890,46 @@ def build_candidate_analysis_payload(
     return candidate_payload
 
 
+def candidate_identity(candidate):
+    return (
+        candidate.get("candidate_supplier"),
+        normalize_hotel_id(candidate["candidate_row"]["hotel_id"]),
+    )
+
+
+def select_analysis_candidates(candidate_scores):
+    sorted_candidates = sorted_candidate_scores(candidate_scores)
+    best_by_supplier = {}
+
+    for candidate in sorted_candidates:
+        supplier_name = candidate.get("candidate_supplier")
+        if supplier_name and supplier_name not in best_by_supplier:
+            best_by_supplier[supplier_name] = candidate
+
+    selected = []
+    selected_keys = set()
+
+    for supplier_name in BASE_SUPPLIERS:
+        candidate = best_by_supplier.get(supplier_name)
+        if not candidate:
+            continue
+        selected.append(candidate)
+        selected_keys.add(candidate_identity(candidate))
+        if len(selected) >= TOP_HOTELS:
+            return sorted_candidate_scores(selected)
+
+    for candidate in sorted_candidates:
+        key = candidate_identity(candidate)
+        if key in selected_keys:
+            continue
+        selected.append(candidate)
+        selected_keys.add(key)
+        if len(selected) >= TOP_HOTELS:
+            break
+
+    return sorted_candidate_scores(selected)
+
+
 def build_analysis_payload(
     source_row,
     source_supplier,
@@ -901,7 +941,7 @@ def build_analysis_payload(
     top_matches = []
     top_matches_by_supplier = defaultdict(list)
 
-    for candidate in sorted_candidate_scores(candidate_scores)[:TOP_HOTELS]:
+    for candidate in select_analysis_candidates(candidate_scores):
         top_matches.append(
             build_candidate_analysis_payload(
                 candidate,
@@ -1207,7 +1247,6 @@ def main():
             target_rows = [
                 row
                 for row in target_rows_by_country[country_code]
-                if normalize_hotel_id(row["hotel_id"]) not in matched_target_hotel_ids
             ]
             if not target_rows:
                 continue
@@ -1255,8 +1294,9 @@ def main():
                     ittid_generator,
                 )
                 if is_matched:
+                    if hotel_key not in matched_target_hotel_ids:
+                        matched_this_supplier += 1
                     matched_target_hotel_ids.add(hotel_key)
-                    matched_this_supplier += 1
 
             print(f"  ✅ {country_code} complete for {base_supplier.upper()}\n")
 
