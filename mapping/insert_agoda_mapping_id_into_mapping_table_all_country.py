@@ -79,7 +79,6 @@ def transfer_data():
                     address_b_bm,
                     star_rating_bm,
                     total_bm,
-                    is_verified,
                     verified_by
                 )
                 SELECT
@@ -93,7 +92,6 @@ def transfer_data():
                     :supplier AS supplier,
                     t1.hotel_id,
                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    1 AS is_verified,
                     'base-mapped' AS verified_by
                 FROM {table_1} t1
                 LEFT JOIN {table_2} m
@@ -123,8 +121,7 @@ def transfer_data():
                     ON t1.hotel_id = m.hotel_id
                 SET 
                     t1.ittid = m.ittid,
-                    t1.status = 'base-mapped',
-                    t1.is_verified = 1
+                    t1.status = 'base-mapped'
                 WHERE m.supplier = :supplier
                 AND t1.country_code = :country_code
                 AND (
