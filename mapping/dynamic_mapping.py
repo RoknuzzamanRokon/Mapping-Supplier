@@ -12,9 +12,9 @@ load_dotenv()
 
 PIPELINE_MAPPING = {
     "base_supplier": "agoda",
-    "base_supplier_2": "hotelbeds",
-    # "base_supplier_3": "tbohotel",
-    "target_supplier": "ean",
+    "base_supplier_2": "ean",
+    "base_supplier_3": "ratehawkhotel",
+    "target_supplier": "didahotel",
 }
 
 # Set this to a single hotel_id to process only that hotel.
@@ -362,6 +362,7 @@ def fetch_all_target_supplier_rows_to_process():
 
 def fetch_base_supplier_candidates(country_code, base_supplier):
     base_supplier_table = get_supplier_table(base_supplier)
+
     sql = text(f"""
         SELECT
             Id,
@@ -381,7 +382,8 @@ def fetch_base_supplier_candidates(country_code, base_supplier):
             photo
         FROM {base_supplier_table}
         WHERE country_code = :country_code
-        """)
+          AND ittid IS NOT NULL
+    """)
 
     with engine.begin() as conn:
         return conn.execute(sql, {"country_code": country_code}).mappings().all()
