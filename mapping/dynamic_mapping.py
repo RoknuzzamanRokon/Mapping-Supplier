@@ -14,7 +14,9 @@ PIPELINE_MAPPING = {
     "base_supplier": "agoda",
     "base_supplier_2": "ean",
     "base_supplier_3": "ratehawkhotel",
-    "target_supplier": "didahotel",
+    "base_supplier_4": "didahotel",
+    "base_supplier_5": "hotelbeds",
+    "target_supplier": "goglobal",
 }
 
 # Set this to a single hotel_id to process only that hotel.
