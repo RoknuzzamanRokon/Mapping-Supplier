@@ -12,12 +12,13 @@ load_dotenv()
 
 PIPELINE_MAPPING = {
     "base_supplier": "agoda",
+    "base_supplier_1": "hotelbeds",
     "base_supplier_2": "ean",
     "base_supplier_3": "ratehawkhotel",
     "base_supplier_4": "didahotel",
     "base_supplier_5": "mgholiday",
     "base_supplier_6": "goglobal",
-    "target_supplier": "hotelbeds",
+    "target_supplier": "tbohotel",
 }
 
 # Set this to a single hotel_id to process only that hotel.
@@ -53,7 +54,7 @@ engine = create_engine(
 def get_base_supplier_sort_key(item):
     key, _ = item
     if key == "base_supplier":
-        return 1
+        return 0
 
     suffix = key.replace("base_supplier_", "", 1)
     return int(suffix) if suffix.isdigit() else 999999
