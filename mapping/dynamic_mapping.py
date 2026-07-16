@@ -12,18 +12,17 @@ load_dotenv()
 
 PIPELINE_MAPPING = {
     "base_supplier": "agoda",
-    "base_supplier_1": "hotelbeds",
-    "base_supplier_2": "ratehawkhotel",
-    "base_supplier_3": "didahotel",
-    "base_supplier_4": "mgholiday",
-    "base_supplier_5": "goglobal",
-    "target_supplier": "stuba",
+    "base_supplier_1": "ratehawkhotel",
+    "base_supplier_2": "didahotel",
+    "base_supplier_3": "mgholiday",
+    "base_supplier_4": "ean",
+    "target_supplier": "hotelbeds",
 }
 
 # Set this to a single hotel_id to process only that hotel.
 # Use None to process all pending hotels.
 TARGET_HOTEL_ID = None
-# TARGET_HOTEL_ID = "123939543"
+# TARGET_HOTEL_ID = "amidea_guest_house"
 
 
 table_2 = f"s_{PIPELINE_MAPPING['target_supplier']}_master"
